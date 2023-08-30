@@ -1,13 +1,9 @@
 from functools import reduce
+import inspect
 from typing import Union
 import torch.nn as nn
 import torch
-import torchvision
-import torchvision.transforms as transforms
-from torchsummary import summary
-from torch.utils.data import DataLoader
 import random
-import time
 import numpy as np
 import sys, os
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
@@ -17,6 +13,10 @@ class FS:
 	def __init__(self) -> None:
 		super().__init__()
 		pass
+
+	_recentPerturbation = None  # For Initialize accumalated faults when perform weight injection. targetLayer, singleDimensionalIdx, original value
+	_neurons = []
+	_NofNeurons = 0
 
 	def getModuleByName(self, module, access_string):
 		names = access_string.split(sep='.')
@@ -58,6 +58,19 @@ class FS:
 
 
 	# 	return model
+
+	def gatherAllNeuronValues(self, model: nn.Module):
+		_moduleNames = self.getModuleNameList(model)
+		def hook(module, input, output):
+			_neurons = output.cpu().numpy()
+			_singleDimensionalNeurons = _neurons.reshape(-1)
+			self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
+			self._NofNeurons += len(_singleDimensionalNeurons)
+
+		for layer in _moduleNames:
+			self.getModuleByName(model, layer).register_forward_hook(hook)
+
+
 	
 	def onlineSingleLayerOutputInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
 		_moduleNames = self.getModuleNameList(model)
@@ -80,6 +93,10 @@ class FS:
 			_neurons = output.cpu().numpy()
 			_originalNeuronShape = _neurons.shape
 			_singleDimensionalNeurons = _neurons.reshape(-1)
+			# plt.hist(_singleDimensionalNeurons, bins=100, range=[-2, 2])
+			# plt.xlabel("Weight Value")
+			# plt.ylabel("Count")
+			# plt.show()
 
 
 			if(errorRate == "unset"):
@@ -173,4 +190,82 @@ class FS:
 	# def onlineMultiLayerOutputInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
 
 
-	# def offlineSinglayerWeightInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
+	def offlineSinglayerWeightInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", accumulate: bool=True):
+		_moduleNames = self.getModuleNameList(model)
+		# _moduleNames = [i for i in _moduleNames if "MaxPool2d" not in i or "ReLU" not in i]
+
+		if(accumulate == False and self._recentPerturbation != None):  # Target of this method is SingleLayer, don't care of _recentPerturbation.targetLayerIdx = list
+			# print(self._recentPerturbation)
+			_recentTargetLayer = self.getModuleByName(model, _moduleNames[self._recentPerturbation["targetLayerIdx"]])
+			_recentTargetWeights = _recentTargetLayer.weight.cpu().numpy()
+			_originalShape = _recentTargetWeights.shape
+			_SDrecentTargetWeights = _recentTargetWeights.reshape(-1)
+			# print("Recovery")
+			for i in range(len(self._recentPerturbation["targetWeightIdxes"])):
+				# print("("+str(i+1)+") " + str(_SDrecentTargetWeights[self._recentPerturbation["targetWeightIdxes"][i]]) + " -> " + str(self._recentPerturbation["originalValues"][i]))
+				_SDrecentTargetWeights[self._recentPerturbation["targetWeightIdxes"][i]] = np.float64(self._recentPerturbation["originalValues"][i])
+			
+			_recentTargetLayer.weight = torch.nn.Parameter(torch.DoubleTensor(_SDrecentTargetWeights.reshape(_originalShape)).cuda())
+			
+			self._recentPerturbation = None
+
+		_exceptLayers = [nn.modules.pooling, nn.modules.dropout, nn.modules.activation]
+
+		_layerFilter = tuple(x[1] for i in _exceptLayers for x in inspect.getmembers(i, inspect.isclass))
+		# print(_layerFilter)
+		if(targetLayer == "random"):
+			_verifiedLayer = False
+			while(not _verifiedLayer):
+				_targetLayerIdx = random.randint(0, len(_moduleNames)-1)
+				_targetLayer = self.getModuleByName(model, _moduleNames[_targetLayerIdx])
+				# print(_targetLayer, (type(_targetLayer) not in _layerFilter))
+				if(type(_targetLayer) not in _layerFilter):
+					_verifiedLayer = True
+					# print("Escaping loop")
+		elif(type(targetLayer) == str):
+			_targetLayer = self.getModuleByName(model, targetLayer)
+
+		# print(type(_targetLayer))
+
+		if(not((type(errorRate) == str) ^ (type(NofError) == str))):
+			raise ValueError('Only one parameter between "errorRate" and "NofError" must be defined.')
+		if( type(errorRate) == int and errorRate > 1): raise ValueError('The value of parameter "errorRate" must be smaller than 1.')
+
+		_weights = _targetLayer.weight.cpu().numpy()
+		_originalWeightShape = _weights.shape
+		_singleDimensionalWeights = _weights.reshape(-1)
+
+		if(errorRate == "unset"):
+				_numError = NofError
+		if(NofError == "unset"):
+			_numError = int(_weights.size * errorRate)
+
+		_targetIndexes = self.generateTargetIndexList(_singleDimensionalWeights.shape, _numError)
+		
+		if(targetBit == "random"):
+			_targetBitIdx = random.randint(0, 31)
+		elif(type(targetBit) == int):
+			_targetBitIdx = targetBit
+
+		_originalValues = []
+		for _targetWeightIdx in _targetIndexes:
+			_originalValues.append(_singleDimensionalWeights[_targetWeightIdx])
+			bits = list(binary(_singleDimensionalWeights[_targetWeightIdx]))
+			bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
+			_singleDimensionalWeights[_targetWeightIdx] = np.float64(binToFloat("".join(bits)))
+		
+		self._recentPerturbation = {
+				"targetLayerIdx": _targetLayerIdx,
+				"targetWeightIdxes": _targetIndexes,
+				"originalValues": _originalValues
+			}
+
+		_weights = _singleDimensionalWeights.reshape(_originalWeightShape)
+		# print(_targetLayer.weight.cpu().numpy() == _weights)
+		# _targetLayer.weight = torch.nn.Parameter(torch.FloatTensor(_weights).cuda())
+		torch.set_default_tensor_type(torch.cuda.DoubleTensor)
+		print(type(torch.cuda.DoubleTensor(_weights)))
+		_targetLayer.weight = torch.nn.Parameter(torch.DoubleTensor(_weights).cuda())
+
+		# print(_singleDimensionalWeights)
+		# print(len(_singleDimensionalWeights))
