@@ -14,11 +14,9 @@ class FS:
 		super().__init__()
 		pass
 
-	_log = []                   # For record information of all injection
 	_recentPerturbation = None  # For Initialize accumalated faults when perform weight injection. targetLayer, singleDimensionalIdx, original value
 	_neurons = []
 	_NofNeurons = 0
-	_layerInfo = None           # For optimize layer selection process. store kind of layer and it's indexes
 
 	def getModuleByName(self, module, access_string):
 		names = access_string.split(sep='.')
@@ -40,27 +38,6 @@ class FS:
 				tmp.append(random.randint(0, i-1))
 			result.append(tmp)
 		return result
-	
-	def selectRandomTargetLayer(self, model, moduleNames, layerTypes=None):
-		if(layerTypes == None):
-			_targetIdx = random.randint(0, len(_targetLayerIdxCand)-1)
-			_targetLayer = self.getModuleByName(model, moduleNames[_targetIdx])
-		else:
-			_targetLayerIdxCand = []
-			for x in layerTypes:
-				if str(x) not in self._layerInfo:
-					msg = f"This model has no attribute: {x}. You must set targetLayerTypes which belongs to {self._layerInfo.keys()}"
-					raise KeyError(msg)
-				else:
-					_targetLayerIdxCand += self._layerInfo["{}".format(x)]
-
-			# print(_targetLayerIdxCand)
-			_targetIdx = random.randint(0, len(_targetLayerIdxCand)-1)
-			# print(_targetLayerIdx, _targetLayerIdxCand[_targetLayerIdx])
-			_targetLayer = self.getModuleByName(model, moduleNames[_targetLayerIdxCand[_targetIdx]])
-			# print(_targetLayer, (type(_targetLayer) not in _layerFilter))
-		return _targetLayer, _targetIdx
-		
 
 	def setLayerPerturbation(self, model: nn.Module):
 		weights = model.features[0].weight.cpu().numpy()
@@ -82,72 +59,25 @@ class FS:
 
 	# 	return model
 
-	def getLog(self):
-		return self._log
-	
-	def initLog(self):
-		self._log = []
-
-
-	def gatherAllNeuronValues(self, model: nn.Module, targetNeuron: str, targetlayerTypes: list=None):
+	def gatherAllNeuronValues(self, model: nn.Module):
 		_moduleNames = self.getModuleNameList(model)
-		_targetLayerIdxCand = []
-
-		def inputHook(module, input):
-			# print(module)
-			_neurons = input[0].cpu().numpy()
-			_singleDimensionalNeurons = _neurons.reshape(-1)
-			self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
-			self._NofNeurons += len(_singleDimensionalNeurons)
-
-		def outputHook(module, input, output):
-			# print(module)
+		def hook(module, input, output):
 			_neurons = output.cpu().numpy()
 			_singleDimensionalNeurons = _neurons.reshape(-1)
 			self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
 			self._NofNeurons += len(_singleDimensionalNeurons)
 
-		for x in targetlayerTypes:
-			if str(x) not in self._layerInfo:
-				msg = f"This model has no attribute: {x}. You must set targetLayerTypes which belongs to {self._layerInfo.keys()}"
-				raise KeyError(msg)
-			else:
-				_targetLayerIdxCand += self._layerInfo["{}".format(x)]
+		for layer in _moduleNames:
+			self.getModuleByName(model, layer).register_forward_hook(hook)
 
-		# print(_targetLayerIdxCand)
-
-		if(targetNeuron=="output"):
-			for idx in _targetLayerIdxCand:
-				self.getModuleByName(model, _moduleNames[idx]).register_forward_hook(outputHook)
-		elif(targetNeuron=="input"):
-			for idx in _targetLayerIdxCand:
-				self.getModuleByName(model, _moduleNames[idx]).register_forward_pre_hook(inputHook)
-		else:
-			raise ValueError("You must set 'targetNeuron' \"input\" or \"output\".")
-
-
-	def setLayerInfo(self, model: nn.Module):
-		self._layerInfo = dict()
-		_moduleNames = self.getModuleNameList(model)
-		for i in range(len(_moduleNames)):
-			layer = self.getModuleByName(model, _moduleNames[i])
-			if(str(type(layer)) not in self._layerInfo):
-				self._layerInfo["{}".format((type(layer)))] = [i]
-			else:
-				self._layerInfo["{}".format((type(layer)))].append(i)
-		
-		# for i in self._layerInfo["{}".format((str(nn.modules.Conv2d)))]:
-		# 	print(i)
-		# 	print(self.getModuleByName(model, _moduleNames[i]))
 
 	
-	def onlineSingleLayerOutputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
+	def onlineSingleLayerOutputInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
 		_moduleNames = self.getModuleNameList(model)
 		if(targetLayer == "random"):
-			_targetLayer, _targetLayerIdx = self.selectRandomTargetLayer(model, _moduleNames, targetLayerTypes)
+			_targetLayer = self.getModuleByName(model, _moduleNames[random.randint(0, len(_moduleNames)-1)])
 		elif(type(targetLayer) == str):
 			_targetLayer = self.getModuleByName(model, targetLayer)
-			_targetLayerIdx = _moduleNames.index(targetLayer)
 
 		# print(_targetLayer)
 
@@ -160,7 +90,6 @@ class FS:
 			nonlocal errorRate		 # 에러 개수를 errorRate로 받았을 때 neuron개수와 곱해주는 등, 안/바깥 함수 간 연산이 필요할 때 위와 같이 사용
 			nonlocal NofError
 			nonlocal targetBit
-			nonlocal _targetLayerIdx
 			_neurons = output.cpu().numpy()
 			_originalNeuronShape = _neurons.shape
 			_singleDimensionalNeurons = _neurons.reshape(-1)
@@ -188,27 +117,13 @@ class FS:
 			elif(type(targetBit) == int):
 				_targetBitIdx = targetBit
 
-			# print(_targetBitIdx)
 
-			tmpLog = []
 			for _targetNeuronIdx in _targetIndexes:
-				beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
-				beforeBinaryRep = binary(beforeDecRep)
-				bits = list(beforeBinaryRep)
+				bits = list(binary(_singleDimensionalNeurons[_targetNeuronIdx]))
 				bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
-				afterBinaryRep = "".join(bits)
-				_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
-				tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx, _targetBitIdx, beforeBinaryRep, beforeDecRep, afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx]))
+				_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat("".join(bits))
 
-			_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
-		
-			self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
-			self._NofNeurons += len(_singleDimensionalNeurons)
-
-			if(len(tmpLog) == 1):
-				self._log.append(tmpLog[0])
-			else:
-				self._log.append(tmpLog)
+				_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
 
 			return torch.FloatTensor(_neurons).cuda()
 		
@@ -216,13 +131,12 @@ class FS:
 
 		return hookHandler
 	
-	def onlineSingleLayerInputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
+	def onlineSingleLayerInputInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
 		_moduleNames = self.getModuleNameList(model)
 		if(targetLayer == "random"):
-			_targetLayer, _targetLayerIdx = self.selectRandomTargetLayer(model, _moduleNames, targetLayerTypes)
+			_targetLayer = self.getModuleByName(model, _moduleNames[random.randint(0, len(_moduleNames)-1)])
 		elif(type(targetLayer) == str):
 			_targetLayer = self.getModuleByName(model, targetLayer)
-			_targetLayerIdx = _moduleNames.index(targetLayer)
 
 		# print(_targetLayer)
 
@@ -235,7 +149,6 @@ class FS:
 			nonlocal errorRate		 # 에러 개수를 errorRate로 받았을 때 neuron개수와 곱해주는 등, 안/바깥 함수 간 연산이 필요할 때 위와 같이 사용
 			nonlocal NofError
 			nonlocal targetBit
-			nonlocal _targetLayerIdx
 			# print(input)
 			_neurons = input[0].cpu().numpy()
 			_originalNeuronShape = _neurons.shape
@@ -260,25 +173,13 @@ class FS:
 			elif(type(targetBit) == int):
 				_targetBitIdx = targetBit
 
-			tmpLog = []
+
 			for _targetNeuronIdx in _targetIndexes:
-				beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
-				beforeBinaryRep = binary(beforeDecRep)
-				bits = list(beforeBinaryRep)
+				bits = list(binary(_singleDimensionalNeurons[_targetNeuronIdx]))
 				bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
-				afterBinaryRep = "".join(bits)
-				_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
+				_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat("".join(bits))
 
-				tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx, _targetBitIdx, beforeBinaryRep, beforeDecRep, afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx]))
-
-			_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
-			self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
-			self._NofNeurons += len(_singleDimensionalNeurons)
-			
-			if(len(tmpLog) == 1):
-				self._log.append(tmpLog[0])
-			else:
-				self._log.append(tmpLog)
+				_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
 
 			return torch.FloatTensor(_neurons).cuda()
 		
@@ -304,7 +205,7 @@ class FS:
 				# print("("+str(i+1)+") " + str(_SDrecentTargetWeights[self._recentPerturbation["targetWeightIdxes"][i]]) + " -> " + str(self._recentPerturbation["originalValues"][i]))
 				_SDrecentTargetWeights[self._recentPerturbation["targetWeightIdxes"][i]] = np.float64(self._recentPerturbation["originalValues"][i])
 			
-			_recentTargetLayer.weight = torch.nn.Parameter(torch.FloatTensor(_SDrecentTargetWeights.reshape(_originalShape)).cuda())
+			_recentTargetLayer.weight = torch.nn.Parameter(torch.DoubleTensor(_SDrecentTargetWeights.reshape(_originalShape)).cuda())
 			
 			self._recentPerturbation = None
 
@@ -361,10 +262,10 @@ class FS:
 
 		_weights = _singleDimensionalWeights.reshape(_originalWeightShape)
 		# print(_targetLayer.weight.cpu().numpy() == _weights)
-		_targetLayer.weight = torch.nn.Parameter(torch.FloatTensor(_weights).cuda())
-		# torch.set_default_tensor_type(torch.cuda.DoubleTensor)
-		# print(type(torch.cuda.DoubleTensor(_weights)))
-		# _targetLayer.weight = torch.nn.Parameter(torch.DoubleTensor(_weights).cuda())
+		# _targetLayer.weight = torch.nn.Parameter(torch.FloatTensor(_weights).cuda())
+		torch.set_default_tensor_type(torch.cuda.DoubleTensor)
+		print(type(torch.cuda.DoubleTensor(_weights)))
+		_targetLayer.weight = torch.nn.Parameter(torch.DoubleTensor(_weights).cuda())
 
 		# print(_singleDimensionalWeights)
 		# print(len(_singleDimensionalWeights))
