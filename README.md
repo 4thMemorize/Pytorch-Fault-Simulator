@@ -166,4 +166,26 @@ numpy (1.21.4)
     4: target neuron/weight의 원본 값 (2진 표현)   
     5: target neuron/weight의 원본 값 (10진 표현)   
     6: bit flip 주입 이후 target neuron/weight의 값 (2진 표현)   
-    7: bit flip 주입 이후 target neuron/weight의 값 (10진 표현)   
+    7: bit flip 주입 이후 target neuron/weight의 값 (10진 표현)
+
+## Example
+```python
+from Models.VGGModel import VGG, vgg16_bn
+
+testset = torchvision.datasets.CIFAR10(root=os.path.dirname(__file__)+'/../Datasets/CIFAR10/data', train=False, download=True, transform=transform)
+testloader = DataLoader(testset, batch_size=1, shuffle=True)
+
+model = vgg16_bn().cuda()
+model.load_state_dict(torch.load(os.path.dirname(__file__)+"/../Models/trained/vgg16_bn.pt"))
+
+model.eval()
+fs = FS()
+fs.setLayerInfo(model)
+
+with torch.no_grad():
+  for data in testloader:
+    inputs, labels = data[0].cuda(), data[1].cuda()
+    handle = fs.onlineSingleLayerOutputInjection(model=model, targetLayerTypes=[torch.nn.ReLU], NofError=1, targetBit=1)
+    outputs = model(inputs)
+    handle.remove()
+```
