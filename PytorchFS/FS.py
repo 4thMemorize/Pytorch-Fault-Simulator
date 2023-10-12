@@ -289,7 +289,7 @@ class FS:
 	# def onlineMultiLayerOutputInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
 
 
-	def offlineSinglayerWeightInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", accumulate: bool=True):
+	def offlineSinglayerWeightInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", accumulate: bool=True):
 		_moduleNames = self.getModuleNameList(model)
 		# _moduleNames = [i for i in _moduleNames if "MaxPool2d" not in i or "ReLU" not in i]
 
@@ -315,8 +315,7 @@ class FS:
 		if(targetLayer == "random"):
 			_verifiedLayer = False
 			while(not _verifiedLayer):
-				_targetLayerIdx = random.randint(0, len(_moduleNames)-1)
-				_targetLayer = self.getModuleByName(model, _moduleNames[_targetLayerIdx])
+				_targetLayer, _targetLayerIdx = self.selectRandomTargetLayer(model, _moduleNames, targetLayerTypes)
 				# print(_targetLayer, (type(_targetLayer) not in _layerFilter))
 				if(type(_targetLayer) not in _layerFilter):
 					_verifiedLayer = True
@@ -347,17 +346,26 @@ class FS:
 			_targetBitIdx = targetBit
 
 		_originalValues = []
+		tmpLog = []
 		for _targetWeightIdx in _targetIndexes:
 			_originalValues.append(_singleDimensionalWeights[_targetWeightIdx])
-			bits = list(binary(_singleDimensionalWeights[_targetWeightIdx]))
+			beforeDecRep = _singleDimensionalWeights[_targetWeightIdx]
+			beforeBinaryRep = binary(beforeDecRep)
+			bits = list(beforeBinaryRep)
 			bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
-			_singleDimensionalWeights[_targetWeightIdx] = np.float64(binToFloat("".join(bits)))
-		
+			afterBinaryRep = "".join(bits)
+			_singleDimensionalWeights[_targetWeightIdx] = np.float64(binToFloat(afterBinaryRep))
+			tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetWeightIdx, _targetBitIdx, beforeBinaryRep, beforeDecRep, afterBinaryRep, _singleDimensionalWeights[_targetWeightIdx]))
+			
 		self._recentPerturbation = {
 				"targetLayerIdx": _targetLayerIdx,
 				"targetWeightIdxes": _targetIndexes,
 				"originalValues": _originalValues
 			}
+		if(len(tmpLog) == 1):
+				self._log.append(tmpLog[0])
+		else:
+			self._log.append(tmpLog)
 
 		_weights = _singleDimensionalWeights.reshape(_originalWeightShape)
 		# print(_targetLayer.weight.cpu().numpy() == _weights)
