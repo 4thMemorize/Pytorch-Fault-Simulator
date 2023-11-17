@@ -19,6 +19,7 @@ class FS:
 	_neurons = []
 	_NofNeurons = 0
 	_layerInfo = None           # For optimize layer selection process. store kind of layer and it's indexes
+	_isDone = False
 
 	def getModuleByName(self, module, access_string):
 		names = access_string.split(sep='.')
@@ -32,7 +33,7 @@ class FS:
 					moduleNames.append(name)
 		return moduleNames
 	
-	def generateTargetIndexList(slef, shape, n):
+	def generateTargetIndexList(self, shape, n):
 		result = []
 		for i in range(n):
 			tmp = []
@@ -43,10 +44,11 @@ class FS:
 	
 	def selectRandomTargetLayer(self, model, moduleNames, layerTypes=None):
 		if(layerTypes == None):
-			_targetIdx = random.randint(0, len(_targetLayerIdxCand)-1)
+			_targetIdx = random.randint(0, len(moduleNames)-1)
 			_targetLayer = self.getModuleByName(model, moduleNames[_targetIdx])
+			_targetLayerIdx = _targetIdx
 		else:
-			_targetLayerIdxCand = []
+			_targetLayerIdxCand = []  # Candidate of indexes, ex) conv2d = [0, 3, 6, 7] is appended.
 			for x in layerTypes:
 				if str(x) not in self._layerInfo:
 					msg = f"This model has no attribute: {x}. You must set targetLayerTypes which belongs to {self._layerInfo.keys()}"
@@ -55,11 +57,13 @@ class FS:
 					_targetLayerIdxCand += self._layerInfo["{}".format(x)]
 
 			# print(_targetLayerIdxCand)
-			_targetIdx = random.randint(0, len(_targetLayerIdxCand)-1)
+			_targetIdxofCandList = random.randint(0, len(_targetLayerIdxCand)-1)
 			# print(_targetLayerIdx, _targetLayerIdxCand[_targetLayerIdx])
-			_targetLayer = self.getModuleByName(model, moduleNames[_targetLayerIdxCand[_targetIdx]])
+			_targetLayer = self.getModuleByName(model, moduleNames[_targetLayerIdxCand[_targetIdxofCandList]])
+			# print(_targetLayer.__class__)
 			# print(_targetLayer, (type(_targetLayer) not in _layerFilter))
-		return _targetLayer, _targetIdx
+			_targetLayerIdx = _targetLayerIdxCand[_targetIdxofCandList]
+		return _targetLayer, _targetLayerIdx
 		
 
 	def setLayerPerturbation(self, model: nn.Module):
@@ -141,7 +145,8 @@ class FS:
 		# 	print(self.getModuleByName(model, _moduleNames[i]))
 
 	
-	def onlineSingleLayerOutputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
+	def onlineSingleLayerOutputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", errorIdx: Union[list, str]="random"):
+		# print("Injection entered")
 		_moduleNames = self.getModuleNameList(model)
 		if(targetLayer == "random"):
 			_targetLayer, _targetLayerIdx = self.selectRandomTargetLayer(model, _moduleNames, targetLayerTypes)
@@ -179,7 +184,10 @@ class FS:
 			# print(_neurons.size)
 			# print(_numError)
 
-			_targetIndexes = self.generateTargetIndexList(_singleDimensionalNeurons.shape, _numError)
+			if(errorIdx != "random"):
+				_targetIndexes = errorIdx
+			else:
+				_targetIndexes = self.generateTargetIndexList(_singleDimensionalNeurons.shape, _numError)
 			# print(_targetIndexes)
 
 			# print(targetBit)
@@ -198,12 +206,12 @@ class FS:
 				bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
 				afterBinaryRep = "".join(bits)
 				_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
-				tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx, _targetBitIdx, beforeBinaryRep, beforeDecRep, afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx]))
+				tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx[0], _targetBitIdx, beforeBinaryRep, beforeDecRep[0], afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx][0]))
 
 			_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
 		
-			self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
-			self._NofNeurons += len(_singleDimensionalNeurons)
+			# self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
+			# self._NofNeurons += len(_singleDimensionalNeurons)
 
 			if(len(tmpLog) == 1):
 				self._log.append(tmpLog[0])
@@ -216,7 +224,8 @@ class FS:
 
 		return hookHandler
 	
-	def onlineSingleLayerInputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
+	def onlineSingleLayerInputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", errorIdx: Union[list, str]="random"):
+		self._isDone = False
 		_moduleNames = self.getModuleNameList(model)
 		if(targetLayer == "random"):
 			_targetLayer, _targetLayerIdx = self.selectRandomTargetLayer(model, _moduleNames, targetLayerTypes)
@@ -236,10 +245,14 @@ class FS:
 			nonlocal NofError
 			nonlocal targetBit
 			nonlocal _targetLayerIdx
+			# print("Hook", self._isDone)
 			# print(input)
 			_neurons = input[0].cpu().numpy()
 			_originalNeuronShape = _neurons.shape
 			_singleDimensionalNeurons = _neurons.reshape(-1)
+
+			if(self._isDone):
+				return torch.FloatTensor(_neurons).cuda()
 
 
 			if(errorRate == "unset"):
@@ -251,7 +264,10 @@ class FS:
 			# print(_neurons.size)
 			# print(_numError)
 
-			_targetIndexes = self.generateTargetIndexList(_singleDimensionalNeurons.shape, _numError)
+			if(errorIdx != "random"):
+				_targetIndexes = errorIdx
+			else:
+				_targetIndexes = self.generateTargetIndexList(_singleDimensionalNeurons.shape, _numError)
 			# print(_targetIndexes)
 
 			# print(targetBit)
@@ -272,13 +288,16 @@ class FS:
 				tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx, _targetBitIdx, beforeBinaryRep, beforeDecRep, afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx]))
 
 			_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
-			self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
-			self._NofNeurons += len(_singleDimensionalNeurons)
+			
+			# self._neurons = np.concatenate((self._neurons, _singleDimensionalNeurons))
+			# self._NofNeurons += len(_singleDimensionalNeurons)
 			
 			if(len(tmpLog) == 1):
 				self._log.append(tmpLog[0])
 			else:
 				self._log.append(tmpLog)
+
+			self._isDone = True
 
 			return torch.FloatTensor(_neurons).cuda()
 		
@@ -289,17 +308,17 @@ class FS:
 	# def onlineMultiLayerOutputInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
 
 
-	def offlineSinglayerWeightInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", accumulate: bool=True):
+	def offlineSinglayerWeightInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", accumulate: bool=True, errorIdx: Union[list, str]="random"):
 		_moduleNames = self.getModuleNameList(model)
 		# _moduleNames = [i for i in _moduleNames if "MaxPool2d" not in i or "ReLU" not in i]
 
 		if(accumulate == False and self._recentPerturbation != None):  # Target of this method is SingleLayer, don't care of _recentPerturbation.targetLayerIdx = list
+			# print("Recovery")
 			# print(self._recentPerturbation)
 			_recentTargetLayer = self.getModuleByName(model, _moduleNames[self._recentPerturbation["targetLayerIdx"]])
 			_recentTargetWeights = _recentTargetLayer.weight.cpu().numpy()
 			_originalShape = _recentTargetWeights.shape
 			_SDrecentTargetWeights = _recentTargetWeights.reshape(-1)
-			# print("Recovery")
 			for i in range(len(self._recentPerturbation["targetWeightIdxes"])):
 				# print("("+str(i+1)+") " + str(_SDrecentTargetWeights[self._recentPerturbation["targetWeightIdxes"][i]]) + " -> " + str(self._recentPerturbation["originalValues"][i]))
 				_SDrecentTargetWeights[self._recentPerturbation["targetWeightIdxes"][i]] = np.float64(self._recentPerturbation["originalValues"][i])
@@ -308,22 +327,19 @@ class FS:
 			
 			self._recentPerturbation = None
 
-		_exceptLayers = [nn.modules.pooling, nn.modules.dropout, nn.modules.activation]
-
-		_layerFilter = tuple(x[1] for i in _exceptLayers for x in inspect.getmembers(i, inspect.isclass))
+		# _exceptLayers = [nn.modules.pooling, nn.modules.dropout, nn.modules.activation]
+		# _layerFilter = tuple(x[1] for i in _exceptLayers for x in inspect.getmembers(i, inspect.isclass))
 		# print(_layerFilter)
+
+
 		if(targetLayer == "random"):
-			_verifiedLayer = False
-			while(not _verifiedLayer):
-				_targetLayer, _targetLayerIdx = self.selectRandomTargetLayer(model, _moduleNames, targetLayerTypes)
-				# print(_targetLayer, (type(_targetLayer) not in _layerFilter))
-				if(type(_targetLayer) not in _layerFilter):
-					_verifiedLayer = True
-					# print("Escaping loop")
+			_targetLayer, _targetLayerIdx = self.selectRandomTargetLayer(model, _moduleNames, targetLayerTypes)
 		elif(type(targetLayer) == str):
 			_targetLayer = self.getModuleByName(model, targetLayer)
+			_targetLayerIdx = _moduleNames.index(targetLayer)
 
 		# print(type(_targetLayer))
+		# print(_targetLayerIdx)
 
 		if(not((type(errorRate) == str) ^ (type(NofError) == str))):
 			raise ValueError('Only one parameter between "errorRate" and "NofError" must be defined.')
@@ -338,7 +354,10 @@ class FS:
 		if(NofError == "unset"):
 			_numError = int(_weights.size * errorRate)
 
-		_targetIndexes = self.generateTargetIndexList(_singleDimensionalWeights.shape, _numError)
+		if(errorIdx != "random"):
+			_targetIndexes = errorIdx
+		else:
+			_targetIndexes = self.generateTargetIndexList(_singleDimensionalWeights.shape, _numError)
 		
 		if(targetBit == "random"):
 			_targetBitIdx = random.randint(0, 31)
