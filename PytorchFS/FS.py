@@ -1,6 +1,6 @@
 from functools import reduce
 import inspect
-from typing import Union
+from typing import Union, Callable
 import torch.nn as nn
 import torch
 import random
@@ -89,6 +89,9 @@ class FS:
 	def getLog(self):
 		return self._log
 	
+	def getLastLog(self):
+		return self._log[-1]
+	
 	def initLog(self):
 		self._log = []
 
@@ -153,7 +156,7 @@ class FS:
 		# 	print(self.getModuleByName(model, _moduleNames[i]))
 
 	
-	def onlineSingleLayerOutputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", errorIdx: Union[list, str]="random"):
+	def onlineSingleLayerOutputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", errorIdx: Union[list, str]="random", modifyValue: Union[Callable[[float], float], str]="None"):
 		# print("Injection entered")
 		_moduleNames = self.getModuleNameList(model)
 		if(targetLayer == "random"):
@@ -208,13 +211,23 @@ class FS:
 
 			tmpLog = []
 			for _targetNeuronIdx in _targetIndexes:
-				beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
-				beforeBinaryRep = binary(beforeDecRep)
-				bits = list(beforeBinaryRep)
-				bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
-				afterBinaryRep = "".join(bits)
-				_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
-				tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx[0], _targetBitIdx, beforeBinaryRep, beforeDecRep[0], afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx][0]))
+				if(modifyValue == "None"):
+					beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
+					beforeBinaryRep = binary(beforeDecRep)
+					bits = list(beforeBinaryRep)
+					bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
+					afterBinaryRep = "".join(bits)
+					_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
+					tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx[0], _targetBitIdx, beforeBinaryRep, beforeDecRep[0], afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx][0]))
+				else:
+					beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
+					beforeBinaryRep = binary(beforeDecRep)
+					_singleDimensionalNeurons[_targetNeuronIdx] = modifyValue(_singleDimensionalNeurons[_targetNeuronIdx])
+					afterDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
+					afterBinaryRep = binary(afterDecRep)
+					tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx[0], "None", beforeBinaryRep, beforeDecRep[0], afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx][0]))
+
+
 
 			_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
 		
@@ -234,7 +247,7 @@ class FS:
 
 		return hookHandler
 	
-	def onlineSingleLayerInputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", errorIdx: Union[list, str]="random"):
+	def onlineSingleLayerInputInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", errorIdx: Union[list, str]="random", modifyValue: Union[Callable[[float], float], str]="None"):
 		self._isDone = False
 		_moduleNames = self.getModuleNameList(model)
 		if(targetLayer == "random"):
@@ -286,16 +299,33 @@ class FS:
 			elif(type(targetBit) == int):
 				_targetBitIdx = targetBit
 
+			# tmpLog = []
+			# for _targetNeuronIdx in _targetIndexes:
+			# 	beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
+			# 	beforeBinaryRep = binary(beforeDecRep)
+			# 	bits = list(beforeBinaryRep)
+			# 	bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
+			# 	afterBinaryRep = "".join(bits)
+			# 	_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
+
+			# 	tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx, _targetBitIdx, beforeBinaryRep, beforeDecRep, afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx]))
 			tmpLog = []
 			for _targetNeuronIdx in _targetIndexes:
-				beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
-				beforeBinaryRep = binary(beforeDecRep)
-				bits = list(beforeBinaryRep)
-				bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
-				afterBinaryRep = "".join(bits)
-				_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
-
-				tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx, _targetBitIdx, beforeBinaryRep, beforeDecRep, afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx]))
+				if(modifyValue == "None"):
+					beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
+					beforeBinaryRep = binary(beforeDecRep)
+					bits = list(beforeBinaryRep)
+					bits[_targetBitIdx] = str(int(not bool(int(bits[_targetBitIdx]))))
+					afterBinaryRep = "".join(bits)
+					_singleDimensionalNeurons[_targetNeuronIdx] = binToFloat(afterBinaryRep)
+					tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx[0], _targetBitIdx, beforeBinaryRep, beforeDecRep[0], afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx][0]))
+				else:
+					beforeDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
+					beforeBinaryRep = binary(beforeDecRep)
+					_singleDimensionalNeurons[_targetNeuronIdx] = modifyValue(_singleDimensionalNeurons[_targetNeuronIdx])
+					afterDecRep = _singleDimensionalNeurons[_targetNeuronIdx]
+					afterBinaryRep = binary(afterDecRep)
+					tmpLog.append("{}:{}:{}:{}:{}:{}:{}:{}".format(_targetLayerIdx, _targetLayer, _targetNeuronIdx[0], "None", beforeBinaryRep, beforeDecRep[0], afterBinaryRep, _singleDimensionalNeurons[_targetNeuronIdx][0]))
 
 			_neurons = _singleDimensionalNeurons.reshape(_originalNeuronShape)
 			
