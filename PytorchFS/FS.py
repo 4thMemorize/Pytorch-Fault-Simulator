@@ -348,7 +348,7 @@ class FS:
 	# def onlineMultiLayerOutputInjection(self, model: nn.Module, targetLayer: str, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random"):
 
 
-	def offlineSinglayerWeightInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", accumulate: bool=True, errorIdx: Union[list, str]="random"):
+	def offlineSingleLayerWeightInjection(self, model: nn.Module, targetLayer: str, targetLayerTypes: list=None, errorRate: float="unset", NofError: int="unset", targetBit: Union[int, str]="random", accumulate: bool=True, errorIdx: Union[list, str]="random"):
 		_moduleNames = self.getModuleNameList(model)
 		# _moduleNames = [i for i in _moduleNames if "MaxPool2d" not in i or "ReLU" not in i]
 
